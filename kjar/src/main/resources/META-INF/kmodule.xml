@@ -1,0 +1,18 @@
+<kmodule xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns="http://jboss.org/kie/6.0.0/kmodule">
+
+    <!-- Forward chaining - dijagnostika i preporuke -->
+    <kbase name="forwardKbase" packages="forward">
+        <ksession name="forwardKsession"/>
+    </kbase>
+
+    <!-- Backward chaining - provera hardverskih preduslova za tuning -->
+    <kbase name="bwBase" packages="backward">
+        <ksession name="bwKsession"/>
+    </kbase>
+
+    <!-- CEP - real-time telemetrija -->
+    <kbase name="cepKbase" eventProcessingMode="stream" packages="cep">
+        <ksession name="cepKsession" clockType="pseudo"/>
+    </kbase>
+
+</kmodule>

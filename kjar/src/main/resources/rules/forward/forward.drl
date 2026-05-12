@@ -1,0 +1,367 @@
+package forward;
+
+import com.ftn.sbnz.model.models.VehicleProfile;
+import com.ftn.sbnz.model.models.DtcCode;
+import com.ftn.sbnz.model.models.DiagnosticResult;
+import com.ftn.sbnz.model.models.TuningAction;
+import com.ftn.sbnz.model.models.ToolRecommendation;
+import com.ftn.sbnz.model.enums.ComponentStatus;
+import com.ftn.sbnz.model.enums.EcuType;
+
+// =============================================================================
+// NIVO 1: DTC kod → status komponente
+// Svaki DTC kod (greska koju auto prijavljuje) mapira se na status komponente.
+// =============================================================================
+
+rule "DTC P0401 - EGR nedovoljan protok -> EGR zapusen"
+    salience 100
+    when
+        $dtc : DtcCode(code == "P0401", $vid : vehicleId)
+        not DiagnosticResult(vehicleId == $vid, componentStatus == ComponentStatus.EGR_CLOGGED)
+    then
+        insert(new DiagnosticResult(ComponentStatus.EGR_CLOGGED, $vid));
+        System.out.println("[Nivo 1] Vozilo " + $vid + ": DTC P0401 -> EGR ZAPUSEN");
+end
+
+rule "DTC P0402 - EGR preveliki protok -> EGR prekoracenje"
+    salience 100
+    when
+        $dtc : DtcCode(code == "P0402", $vid : vehicleId)
+        not DiagnosticResult(vehicleId == $vid, componentStatus == ComponentStatus.EGR_EXCESSIVE_FLOW)
+    then
+        insert(new DiagnosticResult(ComponentStatus.EGR_EXCESSIVE_FLOW, $vid));
+        System.out.println("[Nivo 1] Vozilo " + $vid + ": DTC P0402 -> EGR PREKORACENJE PROTOKA");
+end
+
+rule "DTC P242F - DPF preopterecen pepelom"
+    salience 100
+    when
+        $dtc : DtcCode(code == "P242F", $vid : vehicleId)
+        not DiagnosticResult(vehicleId == $vid, componentStatus == ComponentStatus.DPF_ASH_OVERLOADED)
+    then
+        insert(new DiagnosticResult(ComponentStatus.DPF_ASH_OVERLOADED, $vid));
+        System.out.println("[Nivo 1] Vozilo " + $vid + ": DTC P242F -> DPF PREOPTERECEN PEPELOM");
+end
+
+rule "DTC P2002 - DPF niska efikasnost"
+    salience 100
+    when
+        $dtc : DtcCode(code == "P2002", $vid : vehicleId)
+        not DiagnosticResult(vehicleId == $vid, componentStatus == ComponentStatus.DPF_LOW_EFFICIENCY)
+    then
+        insert(new DiagnosticResult(ComponentStatus.DPF_LOW_EFFICIENCY, $vid));
+        System.out.println("[Nivo 1] Vozilo " + $vid + ": DTC P2002 -> DPF NISKA EFIKASNOST");
+end
+
+// =============================================================================
+// NIVO 2: Status komponente + podaci o vozilu → preporucena akcija
+// VehicleProfile se vezuje za konkretno vozilo pomocu vehicleId.
+// =============================================================================
+
+rule "EGR zapusen + kilometraza > 150000 -> preporuci EGR OFF"
+    salience 80
+    when
+        DiagnosticResult(componentStatus == ComponentStatus.EGR_CLOGGED, $vid : vehicleId)
+        VehicleProfile(vehicleId == $vid, mileage > 150000)
+        not TuningAction(vehicleId == $vid, actionType == "EGR_OFF_RECOMMENDED")
+    then
+        insert(new TuningAction(
+            "EGR_OFF_RECOMMENDED",
+            "Preporuceno softversko gasenje EGR ventila. Kilometraza > 150.000 km, ventil je istroson.",
+            $vid
+        ));
+        System.out.println("[Nivo 2] Vozilo " + $vid + ": Preporuceno EGR OFF (km > 150000)");
+end
+
+rule "EGR zapusen + kilometraza <= 150000 -> preporuci ciscenje EGR"
+    salience 80
+    when
+        DiagnosticResult(componentStatus == ComponentStatus.EGR_CLOGGED, $vid : vehicleId)
+        VehicleProfile(vehicleId == $vid, mileage <= 150000)
+        not TuningAction(vehicleId == $vid, actionType == "EGR_CLEAN_RECOMMENDED")
+    then
+        insert(new TuningAction(
+            "EGR_CLEAN_RECOMMENDED",
+            "Preporuceno mehanicko ciscenje EGR ventila. Kilometraza je ispod 150.000 km.",
+            $vid
+        ));
+        System.out.println("[Nivo 2] Vozilo " + $vid + ": Preporuceno ciscenje EGR (km <= 150000)");
+end
+
+rule "DPF preopterecen pepelom -> preporuci DPF OFF"
+    salience 80
+    when
+        DiagnosticResult(componentStatus == ComponentStatus.DPF_ASH_OVERLOADED, $vid : vehicleId)
+        not TuningAction(vehicleId == $vid, actionType == "DPF_OFF_RECOMMENDED")
+    then
+        insert(new TuningAction(
+            "DPF_OFF_RECOMMENDED",
+            "Preporuceno mehanicko vadjenje i softversko gasenje DPF filtera. Filter je preopterecen pepelom.",
+            $vid
+        ));
+        System.out.println("[Nivo 2] Vozilo " + $vid + ": Preporuceno DPF OFF");
+end
+
+rule "DPF niska efikasnost -> preporuci regeneraciju"
+    salience 80
+    when
+        DiagnosticResult(componentStatus == ComponentStatus.DPF_LOW_EFFICIENCY, $vid : vehicleId)
+        not TuningAction(vehicleId == $vid, actionType == "DPF_REGENERATION_RECOMMENDED")
+    then
+        insert(new TuningAction(
+            "DPF_REGENERATION_RECOMMENDED",
+            "Preporucena prisilna regeneracija DPF filtera pre donosenja odluke o gasenju.",
+            $vid
+        ));
+        System.out.println("[Nivo 2] Vozilo " + $vid + ": Preporucena DPF regeneracija");
+end
+
+rule "EGR prekoracenje protoka -> preporuci zamenu EGR"
+    salience 80
+    when
+        DiagnosticResult(componentStatus == ComponentStatus.EGR_EXCESSIVE_FLOW, $vid : vehicleId)
+        not TuningAction(vehicleId == $vid, actionType == "EGR_REPLACE_RECOMMENDED")
+    then
+        insert(new TuningAction(
+            "EGR_REPLACE_RECOMMENDED",
+            "EGR ventil propusta previse gasova - preporucena zamena ili softversko gasenje. Ciscenje nece pomoci.",
+            $vid
+        ));
+        System.out.println("[Nivo 2] Vozilo " + $vid + ": Preporucena zamena/gasenje EGR (prekoracenje protoka)");
+end
+
+// =============================================================================
+// NIVO 3: Preporucena akcija + ECU tip → preporuceni alat
+// actionType dodat u ToolRecommendation radi sprecavanja kolizije kada isti
+// alat treba biti preporucen i za EGR OFF i za DPF OFF na istom vozilu
+// =============================================================================
+
+rule "EGR OFF + EDC16 -> KESSv2 via OBD"
+    salience 60
+    when
+        TuningAction(actionType == "EGR_OFF_RECOMMENDED", $vid : vehicleId)
+        VehicleProfile(vehicleId == $vid, ecuType == EcuType.BOSCH_EDC16)
+        not ToolRecommendation(vehicleId == $vid, actionType == "EGR_OFF_RECOMMENDED", toolName == "KESSv2")
+    then
+        insert(new ToolRecommendation(
+            "EGR_OFF_RECOMMENDED",
+            "KESSv2",
+            "OBD port (in-car)",
+            "Koristiti KESSv2 protokol za Bosch EDC16. Citanje i upis fajla direktno kroz OBD prikljucak bez skidanja racunara",
+            $vid
+        ));
+        System.out.println("[Nivo 3] Vozilo " + $vid + ": Alat -> KESSv2 via OBD (EDC16, EGR OFF)");
+end
+
+rule "EGR OFF + EDC17 -> PCMflash Bench mode"
+    salience 60
+    when
+        TuningAction(actionType == "EGR_OFF_RECOMMENDED", $vid : vehicleId)
+        VehicleProfile(vehicleId == $vid, ecuType == EcuType.BOSCH_EDC17)
+        not ToolRecommendation(vehicleId == $vid, actionType == "EGR_OFF_RECOMMENDED", toolName == "PCMflash")
+    then
+        insert(new ToolRecommendation(
+            "EGR_OFF_RECOMMENDED",
+            "PCMflash",
+            "Bench mode (racunar skinut iz vozila)",
+            "EDC17 zahteva Bench mode - racunar se fizicki skida i spaja direktno. Alternativa: Flex tool",
+            $vid
+        ));
+        System.out.println("[Nivo 3] Vozilo " + $vid + ": Alat -> PCMflash Bench mode (EDC17, EGR OFF)");
+end
+
+rule "EGR OFF + Siemens SID807 -> Alientech K-TAG Bench"
+    salience 60
+    when
+        TuningAction(actionType == "EGR_OFF_RECOMMENDED", $vid : vehicleId)
+        VehicleProfile(vehicleId == $vid, ecuType == EcuType.SIEMENS_SID807)
+        not ToolRecommendation(vehicleId == $vid, actionType == "EGR_OFF_RECOMMENDED", toolName == "Alientech K-TAG")
+    then
+        insert(new ToolRecommendation(
+            "EGR_OFF_RECOMMENDED",
+            "Alientech K-TAG",
+            "Bench mode",
+            "Siemens SID807 zahteva K-TAG alat u Bench modu. Obavezno preuzeti najnoviji firmware pre rada.",
+            $vid
+        ));
+        System.out.println("[Nivo 3] Vozilo " + $vid + ": Alat -> Alientech K-TAG (SID807, EGR OFF)");
+end
+
+rule "DPF OFF + BMW -> daVinci softver"
+    salience 60
+    when
+        TuningAction(actionType == "DPF_OFF_RECOMMENDED", $vid : vehicleId)
+        VehicleProfile(vehicleId == $vid, vehicleBrand == "BMW")
+        not ToolRecommendation(vehicleId == $vid, actionType == "DPF_OFF_RECOMMENDED", toolName == "daVinci")
+    then
+        insert(new ToolRecommendation(
+            "DPF_OFF_RECOMMENDED",
+            "daVinci",
+            "Software file editing",
+            "Za BMW DPF OFF koristiti daVinci softver za obradu ECU fajla. Preporuceno uz WinOLS za proveru mapa.",
+            $vid
+        ));
+        System.out.println("[Nivo 3] Vozilo " + $vid + ": Alat -> daVinci (BMW, DPF OFF)");
+end
+
+rule "DPF OFF + EDC17 nije BMW -> PCMflash Bench mode"
+    salience 60
+    when
+        TuningAction(actionType == "DPF_OFF_RECOMMENDED", $vid : vehicleId)
+        VehicleProfile(vehicleId == $vid, ecuType == EcuType.BOSCH_EDC17, vehicleBrand != "BMW")
+        not ToolRecommendation(vehicleId == $vid, actionType == "DPF_OFF_RECOMMENDED", toolName == "PCMflash")
+    then
+        insert(new ToolRecommendation(
+            "DPF_OFF_RECOMMENDED",
+            "PCMflash",
+            "Bench mode",
+            "EDC17 DPF OFF zahteva Bench mode. Koristiti PCMflash modul za odgovarajuci model vozila.",
+            $vid
+        ));
+        System.out.println("[Nivo 3] Vozilo " + $vid + ": Alat -> PCMflash Bench mode (EDC17, DPF OFF)");
+end
+
+rule "DPF OFF + EDC16 -> KESSv2 + WinOLS"
+    salience 60
+    when
+        TuningAction(actionType == "DPF_OFF_RECOMMENDED", $vid : vehicleId)
+        VehicleProfile(vehicleId == $vid, ecuType == EcuType.BOSCH_EDC16)
+        not ToolRecommendation(vehicleId == $vid, actionType == "DPF_OFF_RECOMMENDED", toolName == "KESSv2")
+    then
+        insert(new ToolRecommendation(
+            "DPF_OFF_RECOMMENDED",
+            "KESSv2",
+            "OBD port + WinOLS za obradu fajla",
+            "EDC16 DPF OFF: citanje fajla via KESSv2 OBD, zatim obrada DPF mapa u WinOLS, pa upis nazad.",
+            $vid
+        ));
+        System.out.println("[Nivo 3] Vozilo " + $vid + ": Alat -> KESSv2 + WinOLS (EDC16, DPF OFF)");
+end
+
+rule "EGR REPLACE + EDC16 -> KESSv2 via OBD"
+    salience 60
+    when
+        TuningAction(actionType == "EGR_REPLACE_RECOMMENDED", $vid : vehicleId)
+        VehicleProfile(vehicleId == $vid, ecuType == EcuType.BOSCH_EDC16)
+        not ToolRecommendation(vehicleId == $vid, actionType == "EGR_REPLACE_RECOMMENDED", toolName == "KESSv2")
+    then
+        insert(new ToolRecommendation(
+            "EGR_REPLACE_RECOMMENDED",
+            "KESSv2",
+            "OBD port (in-car)",
+            "EDC16: nakon zamene EGR ventila, upisati softver via KESSv2 kroz OBD prikljucak.",
+            $vid
+        ));
+        System.out.println("[Nivo 3] Vozilo " + $vid + ": Alat -> KESSv2 via OBD (EDC16, EGR REPLACE)");
+end
+rule "EGR REPLACE + EDC17 -> PCMflash Bench mode"
+    salience 60
+    when
+        TuningAction(actionType == "EGR_REPLACE_RECOMMENDED", $vid : vehicleId)
+        VehicleProfile(vehicleId == $vid, ecuType == EcuType.BOSCH_EDC17)
+        not ToolRecommendation(vehicleId == $vid, actionType == "EGR_REPLACE_RECOMMENDED", toolName == "PCMflash")
+    then
+        insert(new ToolRecommendation(
+            "EGR_REPLACE_RECOMMENDED",
+            "PCMflash",
+            "Bench mode (racunar skinut iz vozila)",
+            "EDC17: nakon zamene EGR ventila, upisati softver via PCMflash u Bench modu.",
+            $vid
+        ));
+        System.out.println("[Nivo 3] Vozilo " + $vid + ": Alat -> PCMflash Bench mode (EDC17, EGR REPLACE)");
+end
+rule "EGR REPLACE + SID807 -> Alientech K-TAG Bench"
+    salience 60
+    when
+        TuningAction(actionType == "EGR_REPLACE_RECOMMENDED", $vid : vehicleId)
+        VehicleProfile(vehicleId == $vid, ecuType == EcuType.SIEMENS_SID807)
+        not ToolRecommendation(vehicleId == $vid, actionType == "EGR_REPLACE_RECOMMENDED", toolName == "Alientech K-TAG")
+    then
+        insert(new ToolRecommendation(
+            "EGR_REPLACE_RECOMMENDED",
+            "Alientech K-TAG",
+            "Bench mode",
+            "SID807: nakon zamene EGR ventila, upisati softver via Alientech K-TAG u Bench modu.",
+            $vid
+        ));
+        System.out.println("[Nivo 3] Vozilo " + $vid + ": Alat -> Alientech K-TAG (SID807, EGR REPLACE)");
+end
+rule "EGR CLEAN -> mehanicka intervencija"
+    salience 60
+    when
+        TuningAction(actionType == "EGR_CLEAN_RECOMMENDED", $vid : vehicleId)
+        not ToolRecommendation(vehicleId == $vid, actionType == "EGR_CLEAN_RECOMMENDED", toolName == "Mehanicka intervencija")
+    then
+        insert(new ToolRecommendation(
+            "EGR_CLEAN_RECOMMENDED",
+            "Mehanicka intervencija",
+            "Fizicko ciscenje u servisu",
+            "Ventil je dovoljno mlad da ga vrijedi ocistiti. Mehanicko ciscenje EGR ventila bez softverskih izmena.",
+            $vid
+        ));
+        System.out.println("[Nivo 3] Vozilo " + $vid + ": Preporuka -> Mehanicko ciscenje EGR");
+end
+rule "DPF REGENERATION + EDC16 -> VCDS dijagnosticki skener"
+    salience 60
+    when
+        TuningAction(actionType == "DPF_REGENERATION_RECOMMENDED", $vid : vehicleId)
+        VehicleProfile(vehicleId == $vid, ecuType == EcuType.BOSCH_EDC16)
+        not ToolRecommendation(vehicleId == $vid, actionType == "DPF_REGENERATION_RECOMMENDED", toolName == "VCDS")
+    then
+        insert(new ToolRecommendation(
+            "DPF_REGENERATION_RECOMMENDED",
+            "VCDS",
+            "OBD dijagnosticki prikljucak",
+            "EDC16: pokrenuti prisilnu regeneraciju DPF filtera putem VCDS dijagnostickog skenera kroz OBD.",
+            $vid
+        ));
+        System.out.println("[Nivo 3] Vozilo " + $vid + ": Alat -> VCDS regeneracija (EDC16)");
+end
+rule "DPF REGENERATION + EDC17 -> VCDS dijagnosticki skener"
+    salience 60
+    when
+        TuningAction(actionType == "DPF_REGENERATION_RECOMMENDED", $vid : vehicleId)
+        VehicleProfile(vehicleId == $vid, ecuType == EcuType.BOSCH_EDC17)
+        not ToolRecommendation(vehicleId == $vid, actionType == "DPF_REGENERATION_RECOMMENDED", toolName == "VCDS")
+    then
+        insert(new ToolRecommendation(
+            "DPF_REGENERATION_RECOMMENDED",
+            "VCDS",
+            "OBD dijagnosticki prikljucak",
+            "EDC17: pokrenuti prisilnu regeneraciju DPF filtera putem VCDS dijagnostickog skenera kroz OBD.",
+            $vid
+        ));
+        System.out.println("[Nivo 3] Vozilo " + $vid + ": Alat -> VCDS regeneracija (EDC17)");
+end
+rule "DPF REGENERATION + SID807 -> Delphi DS dijagnosticki skener"
+    salience 60
+    when
+        TuningAction(actionType == "DPF_REGENERATION_RECOMMENDED", $vid : vehicleId)
+        VehicleProfile(vehicleId == $vid, ecuType == EcuType.SIEMENS_SID807)
+        not ToolRecommendation(vehicleId == $vid, actionType == "DPF_REGENERATION_RECOMMENDED", toolName == "Delphi DS")
+    then
+        insert(new ToolRecommendation(
+            "DPF_REGENERATION_RECOMMENDED",
+            "Delphi DS",
+            "OBD dijagnosticki prikljucak",
+            "SID807: pokrenuti prisilnu regeneraciju DPF filtera putem Delphi DS dijagnostickog skenera.",
+            $vid
+        ));
+        System.out.println("[Nivo 3] Vozilo " + $vid + ": Alat -> Delphi DS regeneracija (SID807)");
+end
+rule "DPF OFF + SID807 -> Alientech K-TAG Bench"
+    salience 60
+    when
+        TuningAction(actionType == "DPF_OFF_RECOMMENDED", $vid : vehicleId)
+        VehicleProfile(vehicleId == $vid, ecuType == EcuType.SIEMENS_SID807)
+        not ToolRecommendation(vehicleId == $vid, actionType == "DPF_OFF_RECOMMENDED", toolName == "Alientech K-TAG")
+    then
+        insert(new ToolRecommendation(
+            "DPF_OFF_RECOMMENDED",
+            "Alientech K-TAG",
+            "Bench mode",
+            "SID807 DPF OFF zahteva Bench mode. Koristiti Alientech K-TAG za citanje i upis fajla.",
+            $vid
+        ));
+        System.out.println("[Nivo 3] Vozilo " + $vid + ": Alat -> Alientech K-TAG (SID807, DPF OFF)");
+end
